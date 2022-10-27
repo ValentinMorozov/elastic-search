@@ -1,0 +1,73 @@
+{
+  "index": "sample",
+  "title": "Описание источника данных для индекса",
+  "source": {
+    "type": "mongodb",
+    "collection": "person",
+        "fields": [
+          {
+            "objects": [
+              {
+                "data": [
+                  {
+                    "person": [
+                      "lastName",
+                      "firstName",
+                      "middleName"
+                    ]
+                  },
+                  {
+                    "organization": [
+                      "name",
+                      "ogrn",
+                      "inn"
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "number",
+          {
+            "services": ["title", "number"]
+          }
+        ],
+        "joinedCollections": [
+          { "from": "department",
+            "fields": [
+              {
+                "objects": [
+                  {
+                    "data": [
+                      "now"
+                    ]
+                  }
+                ]
+              }
+              ],
+            "localField": "<field.from.the.input.documents>",
+            "foreignField": "<field from the documents of the 'from' collection>",
+            "convertLocalFields": ["None"],
+            "as": "department",
+            "collectFieldOnly": false,
+            "collectField":{
+              "as": "collectField",
+              "fields": [
+                "name",
+                "xname",
+                "objects.data.person"
+              ]
+            }
+          }
+        ],
+    "collectField":{
+      "as": "collectField",
+      "fields": [
+        "name",
+        "xname",
+        "objects.data.person"
+      ],
+      "separator": ","
+    }
+  }
+}

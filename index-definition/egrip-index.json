@@ -1,0 +1,37 @@
+{
+  "index": "egrip",
+  "title": "≈диный государственный реестр индивидуальных предпринимателей",
+  "source": {
+    "collection": "EGRIP",
+        "fields": [ "»ЌЌ‘Ћ",
+		    "—вјдрЁлѕочты.E-mail" 
+        ],
+    "joinedCollections": [
+      { "from": "EGRIP",
+        "localField": "_id",
+        "foreignField": "_id",
+        "convertLocalFields": ["ObjectId"],
+        "as": "department",
+          "fields": [
+            "—в–егќрг.ЌаимЌќ"
+          ],
+        "summaryField":{
+          "as": "summaryFieldJoinedCollections",
+          "fields": [
+            "—в–егќрг.ЌаимЌќ"
+          ],
+          "separator": ","
+        }
+      }
+    ],
+
+    "summaryField":{
+      "as": "summaryField",
+      "fields": [
+        "»ЌЌ‘Ћ",
+        "—в–егќрг.ЌаимЌќ"
+      ],
+      "separator": ","
+    }
+  }
+}
