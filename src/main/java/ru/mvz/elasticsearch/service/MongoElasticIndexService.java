@@ -23,13 +23,9 @@ public class MongoElasticIndexService {
 
     final private DocumentHelper documentHelper;
 
-    final private RabbitMQ rabbitMQ;
-
-    public MongoElasticIndexService(IndexDefinitionRepository indexDefinitionRepository, DocumentHelper documentHelper,
-                                    RabbitMQ rabbitMQ) {
+    public MongoElasticIndexService(IndexDefinitionRepository indexDefinitionRepository, DocumentHelper documentHelper) {
         this.indexDefinitionRepository = indexDefinitionRepository;
         this.documentHelper = documentHelper;
-        this.rabbitMQ = rabbitMQ;
     }
 
     public MongoElasticIndex get(String indexName, String indexType) throws IOException, ConvertDataException {
@@ -41,18 +37,18 @@ public class MongoElasticIndexService {
                         new Bson2MongoElasticIndexParameters(indexDefinition, documentHelper));
             }
         }
-        if(nonNull(mongoElasticIndex))
+        if(nonNull(mongoElasticIndex)) {
             put(mongoElasticIndex);
+        }
         return mongoElasticIndex;
     }
 
-    public MongoElasticIndex put(MongoElasticIndex mongoElasticIndex) {
-        return indexMap.put(Arrays.asList(
+    public void put(MongoElasticIndex mongoElasticIndex) {
+        indexMap.put(Arrays.asList(
                 mongoElasticIndex.getIndex(),
                 mongoElasticIndex.getType()),
                 mongoElasticIndex);
     }
-
 
     public MongoElasticIndex getWithException(String indexName, String indexType)
             throws IOException, ConvertDataException, NotFoundIndexDefinitionException {

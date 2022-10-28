@@ -22,6 +22,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.publisher.ParallelFlux;
 import reactor.core.scheduler.Schedulers;
 import reactor.rabbitmq.*;
+import reactor.util.function.Tuple2;
 import reactor.util.retry.Retry;
 import ru.mvz.elasticsearch.config.AppConfig;
 import ru.mvz.elasticsearch.config.RabbitMQConfig;
@@ -35,6 +36,7 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -75,6 +77,8 @@ public class Indexer {
 
     private Task rabbitMQTask;
 
+    final private Set<String> waitingForResponse = ConcurrentHashMap.newKeySet();
+
     /**
      * Список активных задач индексатора
      */
@@ -102,6 +106,10 @@ public class Indexer {
 
     @EventListener(ApplicationReadyEvent.class)
     public void runAfterStartup() {
+        startRabbitMQTask();
+    }
+
+    private void startRabbitMQTask() {
 
         Flux<Delivery> inboundFlux = RabbitFlux
                 .createReceiver()
@@ -113,32 +121,32 @@ public class Indexer {
                 );
         rabbitMQTask = new Task(null);
         ParallelFlux dataEventsFlux = inboundFlux
-            .parallel(appConfig.getIndexParallelism())
-            .runOn(Schedulers.boundedElastic())
-            .map(msg -> {
-                RabbitMQ.IndexEvent indexEvent = rabbitMQ.msg2IndexEvent(msg);
-                try {
-                    return CreateIndexItem(indexEvent);
-                } catch (IllegalObjectIdException | IOException | ConvertDataException e) {
-                    logger.error("{} For message: {}", String.join(", ",throwable2ListMessage(e)),
-                            new String(msg.getBody(), StandardCharsets.UTF_8));
-                }
-                return new IndexItem(null, null, null);
-            })
-            .filter(e -> nonNull(e.getAction()))
-            .flatMap(item ->
-                Flux.zip("delete".equals(item.getAction())
-                                ? Flux.just(new Document().append("_id", item.getIdDocument().get("_id")))
-                                : reactorRepositoryMongoDB.find(
-                                    item.getMongoElasticIndex().getCollection(),
-                                    item.getIdDocument(),
-                                    item.getMongoElasticIndex().getProjection()),
-                    Flux.just(item))
-                        .map(d -> new EventDocument(d.getT2().getAction(),
-                                d.getT1(),
-                                d.getT2().getMongoElasticIndex()))
-            .parallel(appConfig.getIndexParallelism())
-            .runOn(Schedulers.boundedElastic()));
+                .parallel(appConfig.getIndexParallelism())
+                .runOn(Schedulers.boundedElastic())
+                .map(msg -> {
+                    RabbitMQ.IndexEvent indexEvent = rabbitMQ.msg2IndexEvent(msg);
+                    try {
+                        return CreateIndexItem(indexEvent);
+                    } catch (IllegalObjectIdException | IOException | ConvertDataException e) {
+                        logger.error("{} For message: {}", String.join(", ",throwable2ListMessage(e)),
+                                new String(msg.getBody(), StandardCharsets.UTF_8));
+                    }
+                    return new IndexItem(null, null, null);
+                })
+                .filter(e -> nonNull(e.getAction()))
+                .flatMap(item ->
+                        Flux.zip("delete".equals(item.getAction())
+                                                ? Flux.just(new Document().append("_id", item.getIdDocument().get("_id")))
+                                                : reactorRepositoryMongoDB.find(
+                                                item.getMongoElasticIndex().getCollection(),
+                                                item.getIdDocument(),
+                                                item.getMongoElasticIndex().getProjection()),
+                                        Flux.just(item))
+                                .map(d -> new EventDocument(d.getT2().getAction(),
+                                        d.getT1(),
+                                        d.getT2().getMongoElasticIndex()))
+                                .parallel(appConfig.getIndexParallelism())
+                                .runOn(Schedulers.boundedElastic()));
         rabbitMQTask.setDispose(processingData(EventDocument::getAction,
                 EventDocument::getDocument,
                 EventDocument::getMongoElasticIndex,
@@ -147,7 +155,6 @@ public class Indexer {
         rabbitMQTask.setStartDate(new Date());
         addTask(rabbitMQTask);
     }
-
 
     public Mono<Document> sendIndexEvent(RabbitMQ.IndexEvent indexEvent)
             throws IOException, ConvertDataException, NotFoundIndexDefinitionException, IllegalObjectIdException {
@@ -222,10 +229,12 @@ public class Indexer {
 
             .subscribe(
                     p -> {
-                        int count = Optional.ofNullable(p.get("items", List.class))
+                        waitingForResponse.remove(p.getT1());
+                        int count = Optional.ofNullable(p.getT2().get("items", List.class))
                                 .map(List::size)
                                 .orElse(0);
                         task.addIndexesWrite(count);
+
                     },
                     e -> {
                         if(task != rabbitMQTask)removeTask(task);
@@ -276,7 +285,7 @@ public class Indexer {
                 Function<T, Document> getDocument,
                 Function<T, MongoElasticIndex> getMongoElasticIndex) {
         return (ParallelFlux<T> items) -> items.map(item -> {
-            String elasticSend = "";
+            String elasticSend;
             try {
                 Document document = getDocument.apply(item);
                 MongoElasticIndex mongoElasticIndex = getMongoElasticIndex.apply(item);
@@ -313,34 +322,36 @@ public class Indexer {
      *
      * @return функциональный объект, выполнняющий HTTP-запросы к ElasticSearch
      */
-    public Function<Flux<String>, Flux<Document>> postBulk() {
+    public Function<Flux<String>, Flux<Tuple2<String, Document>>> postBulk() {
         return (Flux<String> source) -> source
-                .flatMap(buffer ->
-                        webClientElastic.post()
-                                .uri("/_bulk")
-                                .body(BodyInserters.fromValue(buffer))
-                                .retrieve()
-                                .onStatus(httpStatus -> httpStatus.equals(HttpStatus.TOO_MANY_REQUESTS),
-                                        response -> Mono.error(new HttpServiceException("System is overloaded",
-                                                response.rawStatusCode())))
-                                .onStatus(httpStatus -> httpStatus.is4xxClientError() && !httpStatus.equals(HttpStatus.TOO_MANY_REQUESTS),
-                                        response -> Mono.error(new RuntimeException("API not found")))
-                                .onStatus(HttpStatus::is5xxServerError,
-                                        response -> Mono.error(new HttpServiceException("Server is not responding",
-                                                response.rawStatusCode())))
-                                .bodyToFlux(Document.class)
-                                .retryWhen(Retry.backoff(appConfig.getWebClientRetryMaxAttempts(),
-                                                Duration.ofSeconds(appConfig.getWebClientRetryMinBackoff()))
-                                        .filter(throwable -> throwable instanceof HttpServiceException)
-                                        .onRetryExhaustedThrow((retryBackoffSpec, retrySignal) -> {
-                                            throw new HttpServiceException("External Service failed to process after max retries",
-                                                    HttpStatus.SERVICE_UNAVAILABLE.value());
-                                        }))
+            .flatMap(buffer -> {
+                waitingForResponse.add(buffer);
+                return Flux.zip(Flux.just(buffer),
+                    webClientElastic.post()
+                        .uri("/_bulk")
+                        .body(BodyInserters.fromValue(buffer))
+                        .retrieve()
+                        .onStatus(httpStatus -> httpStatus.equals(HttpStatus.TOO_MANY_REQUESTS),
+                                response -> Mono.error(new HttpServiceException("System is overloaded",
+                                        response.rawStatusCode())))
+                        .onStatus(httpStatus -> httpStatus.is4xxClientError() && !httpStatus.equals(HttpStatus.TOO_MANY_REQUESTS),
+                                response -> Mono.error(new RuntimeException("API not found")))
+                        .onStatus(HttpStatus::is5xxServerError,
+                                response -> Mono.error(new HttpServiceException("Server is not responding",
+                                        response.rawStatusCode())))
+                        .bodyToFlux(Document.class)
+                        .retryWhen(Retry.backoff(appConfig.getWebClientRetryMaxAttempts(),
+                                    Duration.ofSeconds(appConfig.getWebClientRetryMinBackoff()))
+                            .filter(throwable -> throwable instanceof HttpServiceException)
+                            .onRetryExhaustedThrow((retryBackoffSpec, retrySignal) -> {
+                                throw new HttpServiceException("External Service failed to process after max retries",
+                                        HttpStatus.SERVICE_UNAVAILABLE.value());
+                            }))
                 );
+            });
 
     }
 
-    
     Consumer<Object> testAliveResponses(Task task) {
         return (Object object) -> {
             if (getProcessingRequest() > getMaxProcessingRequest() * 2) {
@@ -497,7 +508,7 @@ public class Indexer {
 
     }
 
-    public class HttpServiceException extends RuntimeException {
+    static public class HttpServiceException extends RuntimeException {
         int statusCode;
         public HttpServiceException(String message, int statusCode) {
             super(message);

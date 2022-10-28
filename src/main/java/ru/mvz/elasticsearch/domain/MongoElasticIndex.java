@@ -152,7 +152,7 @@ public class MongoElasticIndex extends MongoFields {
 
     private void actionBuild(String action, Document document, StringBuilder stringBuilder) {
         String id = document.get("_id").toString();
-        stringBuilder.append("{" + "\"" + action + "\"" + ":{");
+        stringBuilder.append("{" + "\"").append(action).append("\"").append(":{");
         appendKeyValue("_index", getIndex(), stringBuilder);
         String type = getType();
         if(nonNull(type) && !type.isEmpty()) {
@@ -165,12 +165,12 @@ public class MongoElasticIndex extends MongoFields {
     }
 
     static private void appendKey(String key, StringBuilder stringBuilder) {
-        stringBuilder.append("\"" + key + "\"" + ":" );
+        stringBuilder.append("\"").append(key).append("\"").append(":");
     }
 
     static private void appendKeyValue(String key, String value, StringBuilder stringBuilder) {
         appendKey(key, stringBuilder);
-        stringBuilder.append("\"" + value + "\"");
+        stringBuilder.append("\"").append(value).append("\"");
     }
 
     private Set<List<String>> extractFromJoinedCollection (Function<JoinedCollection,
@@ -192,7 +192,7 @@ public class MongoElasticIndex extends MongoFields {
 
                     Document doc = new Document();
                     if(values.size() == p.getForeignFields().size()) {
-                        p.getForeignFields().stream()
+                        p.getForeignFields()
                                 .forEach(s -> {
                                     int i = doc.size();
                                     Object value = values.get(i);
