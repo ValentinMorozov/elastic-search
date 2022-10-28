@@ -1,10 +1,11 @@
-package ru.mvz.elasticsearch.service;
+package ru.mvz.elasticsearch.repository;
 
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.SimpleDateFormat;
@@ -37,12 +38,12 @@ public class FileStorage {
         );
     }
 
-    Flux<String> pullFileContents() {
+    public Flux<String> pullFileContents() {
         Stream<Path> directoryStream;
         try {
             directoryStream = Files.list(path);
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            throw new UncheckedIOException(e);
         }
         return Flux.fromStream(directoryStream).map(file -> {
             try {
@@ -50,7 +51,7 @@ public class FileStorage {
                 Files.delete(file);
                 return data;
             } catch (IOException e) {
-                throw new RuntimeException(e);
+                throw new UncheckedIOException(e);
             }
         });
     }
