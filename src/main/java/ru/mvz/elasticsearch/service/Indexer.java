@@ -221,7 +221,7 @@ public class Indexer {
             .sequential()
             .transform(grouping(task))      // Агрегирование данных для _bulk
             .mergeWith(mergeFlux)
-            .transform(postBulk())          // Отправка запросов в ElasticSearch
+            .transform(postBulk(task))          // Отправка запросов в ElasticSearch
             .subscribeOn(Schedulers.single())
             .doOnNext(testAliveResponses(task))
             .doOnSubscribe(p-> p.request(appConfig.getMaxSizeBuffer() * 2))
@@ -237,12 +237,13 @@ public class Indexer {
 
             .subscribe(
                     p -> {
-                        waitingForResponse.remove(p.getT1());
+                        if(isNull(task.getMongoElasticIndex())) { // Если задача не переиндексация
+                            waitingForResponse.remove(p.getT1());
+                        }
                         int count = Optional.ofNullable(p.getT2().get("items", List.class))
                                 .map(List::size)
                                 .orElse(0);
                         task.addIndexesWrite(count);
-
                     },
                     e -> {
                         if(task != rabbitMQTask)removeTask(task);
@@ -331,10 +332,12 @@ public class Indexer {
      *
      * @return функциональный объект, выполнняющий HTTP-запросы к ElasticSearch
      */
-    public Function<Flux<String>, Flux<Tuple2<String, Document>>> postBulk() {
+    public Function<Flux<String>, Flux<Tuple2<String, Document>>> postBulk(Task task) {
         return (Flux<String> source) -> source
             .flatMap(buffer -> {
-                waitingForResponse.add(buffer);
+                if(isNull(task.getMongoElasticIndex())) { // Если задача не переиндексация
+                    waitingForResponse.add(buffer);
+                }
                 return Flux.zip(Flux.just(buffer),
                     webClientElastic.post()
                         .uri("/_bulk")
@@ -353,7 +356,6 @@ public class Indexer {
                                     Duration.ofSeconds(appConfig.getWebClientRetryMinBackoff()))
                             .filter(throwable -> throwable instanceof HttpServiceException)
                             .onRetryExhaustedThrow((retryBackoffSpec, retrySignal) -> {
-
                                 throw new HttpServiceException("External Service failed to process after max retries",
                                         HttpStatus.SERVICE_UNAVAILABLE.value());
                             }))

@@ -5,6 +5,7 @@ import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.SimpleDateFormat;
@@ -42,7 +43,7 @@ public class FileStorage {
         try {
             directoryStream = Files.list(path);
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            throw new UncheckedIOException(e);
         }
         return Flux.fromStream(directoryStream).map(file -> {
             try {
@@ -50,7 +51,7 @@ public class FileStorage {
                 Files.delete(file);
                 return data;
             } catch (IOException e) {
-                throw new RuntimeException(e);
+                throw new UncheckedIOException(e);
             }
         });
     }
