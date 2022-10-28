@@ -3,6 +3,7 @@ package ru.mvz.elasticsearch.config;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.Getter;
 import lombok.Setter;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -10,6 +11,8 @@ import org.springframework.context.annotation.Configuration;
 import ru.mvz.elasticsearch.util.DocumentBson;
 import ru.mvz.elasticsearch.util.DocumentHelper;
 
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.text.SimpleDateFormat;
 
 @Configuration
@@ -38,15 +41,23 @@ public class AppConfig {
     @Value(":yyyy-MM-dd'T'HH:mm:ss.SSSXX")
     String dateFormat;
 
+    private String fileStoragePath;
+
     @Bean
     DocumentHelper documentTree() {
         return new DocumentHelper(new DocumentBson(), objectMapper());
     }
+
     @Bean
     public ObjectMapper objectMapper() {
         return new ObjectMapper()
                 .setDateFormat(new SimpleDateFormat(dateFormat));
     }
 
+    @Bean
+    @Qualifier("fileStorage")
+    Path path() {
+        return Paths.get(fileStoragePath);
+    }
 
 }

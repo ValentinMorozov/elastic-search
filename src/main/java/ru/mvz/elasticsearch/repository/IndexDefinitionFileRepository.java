@@ -26,17 +26,6 @@ public class IndexDefinitionFileRepository implements IndexDefinitionRepository 
                 indexDefinition.getCharset());
         document = Document.parse(buffer);
 
-/*
-        try {
-            String buffer = new String(Files.readAllBytes(indexDefinition.getPath(fileNameBuild(indexName,indexType))),
-                    indexDefinition.getCharset());
-            document = Document.parse(buffer);
-        }
-        catch (FileNotFoundException | NoSuchFileException e ) {
-            e.printStackTrace();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }*/
         return document;
     }
 

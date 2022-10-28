@@ -69,6 +69,8 @@ public class Indexer {
 
     final private RabbitMQ rabbitMQ;
 
+    final private FileStorage fileStorage;
+
     final private AppConfig appConfig;
 
     final private AtomicLong sendRequest = new AtomicLong();
@@ -77,7 +79,7 @@ public class Indexer {
 
     private Task rabbitMQTask;
 
-    final private Set<String> waitingForResponse = ConcurrentHashMap.newKeySet();
+    final private Set<Object> waitingForResponse = ConcurrentHashMap.newKeySet();
 
     /**
      * Список активных задач индексатора
@@ -90,6 +92,7 @@ public class Indexer {
                    RabbitMQConfig rabbitMQConfig,
                    Receiver rabbitMQReceiver,
                    RabbitMQ rabbitMQ,
+                   FileStorage fileStorage,
                    AppConfig appConfig) {
         this.reactorRepositoryMongoDB = reactorRepositoryMongoDB;
         this.mongoElasticIndexService = mongoElasticIndexService;
@@ -100,6 +103,7 @@ public class Indexer {
         this.rabbitMQConfig = rabbitMQConfig;
         this.rabbitMQReceiver = rabbitMQReceiver;
         this.rabbitMQ = rabbitMQ;
+        this.fileStorage = fileStorage;
         this.appConfig = appConfig;
 
     }
@@ -150,6 +154,7 @@ public class Indexer {
         rabbitMQTask.setDispose(processingData(EventDocument::getAction,
                 EventDocument::getDocument,
                 EventDocument::getMongoElasticIndex,
+                fileStorage.pullFileContents(),
                 rabbitMQTask)
                 .apply(dataEventsFlux));
         rabbitMQTask.setStartDate(new Date());
@@ -179,7 +184,6 @@ public class Indexer {
         Document result = new Document();
         MongoElasticIndex mongoElasticIndex = mongoElasticIndexService.getWithException(indexName, indexType);
 
-
         if(nonNull(mongoElasticIndex)) {
             Task task = new Task(mongoElasticIndex);
             ParallelFlux dataEventsFlux = reactorRepositoryMongoDB
@@ -191,6 +195,7 @@ public class Indexer {
             task.setDispose(processingData((p) -> "index",
                     (p) -> (Document)p,
                     (p) -> mongoElasticIndex,
+                    Flux.just(),
                     task)
                     .apply(dataEventsFlux));
             task.setStartDate(new Date());
@@ -207,6 +212,7 @@ public class Indexer {
         processingData(Function<T, String> getAction,
                        Function<T, Document> getDocument,
                        Function<T, MongoElasticIndex> getMongoElasticIndex,
+                       Flux<String> mergeFlux,
                        Task task) {
         return (ParallelFlux<T> events) -> events
             .transform(joinData(getDocument, getMongoElasticIndex))    // Добавление данных к исходному документу из присоединяемых коллекций
@@ -214,6 +220,7 @@ public class Indexer {
 
             .sequential()
             .transform(grouping(task))      // Агрегирование данных для _bulk
+            .mergeWith(mergeFlux)
             .transform(postBulk())          // Отправка запросов в ElasticSearch
             .subscribeOn(Schedulers.single())
             .doOnNext(testAliveResponses(task))
@@ -224,6 +231,7 @@ public class Indexer {
                     formatDate(new Date()),
                     task.getDocumentsRead(),
                     task.getIndexesWrite(), getMaxProcessingRequest());
+                fileStorage.writeCollection2Files(waitingForResponse);
                 removeTask(task);
             })
 
@@ -238,6 +246,7 @@ public class Indexer {
                     },
                     e -> {
                         if(task != rabbitMQTask)removeTask(task);
+                        fileStorage.writeCollection2Files(waitingForResponse);
                         logger.error("Error: {}", e.getMessage());
                     }
             );
@@ -344,6 +353,7 @@ public class Indexer {
                                     Duration.ofSeconds(appConfig.getWebClientRetryMinBackoff()))
                             .filter(throwable -> throwable instanceof HttpServiceException)
                             .onRetryExhaustedThrow((retryBackoffSpec, retrySignal) -> {
+
                                 throw new HttpServiceException("External Service failed to process after max retries",
                                         HttpStatus.SERVICE_UNAVAILABLE.value());
                             }))
@@ -413,6 +423,7 @@ public class Indexer {
             activeTasks.add(task);
         }
     }
+
     private void removeTask(Task task) {
         synchronized (activeTasks) {
             activeTasks.remove(task);
