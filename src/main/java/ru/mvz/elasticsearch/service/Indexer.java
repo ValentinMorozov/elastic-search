@@ -64,11 +64,7 @@ public class Indexer {
 
     final private WebClient webClientElastic;
 
-    final private RabbitMQConfig rabbitMQConfig;
-
-    final private Receiver rabbitMQReceiver;
-
-    final private RabbitMQ rabbitMQ;
+    final private ReactiveQueue reactiveQueue;
 
     final private FileStorage fileStorage;
 
@@ -90,9 +86,7 @@ public class Indexer {
     public Indexer(ReactorRepositoryMongoDB reactorRepositoryMongoDB,
                    MongoElasticIndexService mongoElasticIndexService,
                    @Qualifier("elastic") WebClient.Builder webClientElastic,
-                   RabbitMQConfig rabbitMQConfig,
-                   Receiver rabbitMQReceiver,
-                   RabbitMQ rabbitMQ,
+                   ReactiveQueue reactiveQueue,
                    FileStorage fileStorage,
                    AppConfig appConfig) {
         this.reactorRepositoryMongoDB = reactorRepositoryMongoDB;
@@ -101,9 +95,7 @@ public class Indexer {
                 .filter(onRequest())
                 .filter(onResponse())
                 .build();
-        this.rabbitMQConfig = rabbitMQConfig;
-        this.rabbitMQReceiver = rabbitMQReceiver;
-        this.rabbitMQ = rabbitMQ;
+        this.reactiveQueue = reactiveQueue;
         this.fileStorage = fileStorage;
         this.appConfig = appConfig;
 
@@ -111,69 +103,63 @@ public class Indexer {
 
     @EventListener(ApplicationReadyEvent.class)
     public void runAfterStartup() {
-        startRabbitMQTask();
+        startQueueTask();
     }
 
-    private void startRabbitMQTask() {
+    private void startQueueTask() {
 
-        Flux<Delivery> inboundFlux = RabbitFlux
-                .createReceiver()
-                .consumeAutoAck(rabbitMQConfig.getQueue(), new ConsumeOptions()
-                        .exceptionHandler(new ExceptionHandlers.RetryAcknowledgmentExceptionHandler(
-                                Duration.ofSeconds(20), Duration.ofMillis(500),
-                                ExceptionHandlers.CONNECTION_RECOVERY_PREDICATE
-                        ))
-                );
+
         rabbitMQTask = new Task(null);
-        ParallelFlux dataEventsFlux = inboundFlux
+        ParallelFlux dataEventsFlux = reactiveQueue.inboundFlux()
                 .parallel(appConfig.getIndexParallelism())
                 .runOn(Schedulers.boundedElastic())
                 .map(msg -> {
-                    RabbitMQ.IndexEvent indexEvent = rabbitMQ.msg2IndexEvent(msg);
+                    IndexEvent indexEvent = reactiveQueue.msg2IndexEvent(msg);
                     try {
                         return CreateIndexItem(indexEvent);
                     } catch (IllegalObjectIdException | IOException | ConvertDataException e) {
                         logger.error("{} For message: {}", String.join(", ",throwable2ListMessage(e)),
                                 new String(msg.getBody(), StandardCharsets.UTF_8));
+                        return new IndexItem(null, null, null);
                     }
-                    return new IndexItem(null, null, null);
                 })
                 .filter(e -> nonNull(e.getAction()))
                 .flatMap(item ->
-                        Flux.zip("delete".equals(item.getAction())
-                                                ? Flux.just(new Document().append("_id", item.getIdDocument().get("_id")))
-                                                : reactorRepositoryMongoDB.find(
-                                                item.getMongoElasticIndex().getCollection(),
-                                                item.getIdDocument(),
-                                                item.getMongoElasticIndex().getProjection()),
-                                        Flux.just(item))
-                                .map(d -> new EventDocument(d.getT2().getAction(),
-                                        d.getT1(),
-                                        d.getT2().getMongoElasticIndex()))
-                                .parallel(appConfig.getIndexParallelism())
-                                .runOn(Schedulers.boundedElastic()));
-        rabbitMQTask.setDispose(processingData(EventDocument::getAction,
+                    Flux.zip("delete".equals(item.getAction())
+                                // Для операции удаления создаётся Document, содержащий _id удаляемого документа
+                            ? Flux.just(new Document().append("_id", item.getIdDocument().get("_id")))
+                                // Для операции обновления индекса Document загружается из базы данных
+                            : reactorRepositoryMongoDB.find(
+                                item.getMongoElasticIndex().getCollection(),
+                                item.getIdDocument(),
+                                item.getMongoElasticIndex().getProjection()),
+                        Flux.just(item)
+                    )
+                    .map(d -> new EventDocument(d.getT2().getAction(),
+                            d.getT1(),
+                            d.getT2().getMongoElasticIndex()))
+                );
+
+        Flux<Tuple2<String,Document>> processedData = processingData(dataEventsFlux,
+                EventDocument::getAction,
                 EventDocument::getDocument,
                 EventDocument::getMongoElasticIndex,
                 fileStorage.pullFileContents(),
-                rabbitMQTask)
-                .apply(dataEventsFlux));
+                rabbitMQTask);
+
+        rabbitMQTask.setDispose(subscribe(processedData, rabbitMQTask));
         rabbitMQTask.setStartDate(new Date());
         addTask(rabbitMQTask);
     }
 
-    public Mono<Document> sendIndexEvent(RabbitMQ.IndexEvent indexEvent)
+    public Mono<Document> sendIndexEvent(IndexEvent indexEvent)
             throws IOException, ConvertDataException, NotFoundIndexDefinitionException, IllegalObjectIdException {
-        /*
-        Проверка на наличие описания индекса
-         */
+            // Проверка на наличие описания индекса
         mongoElasticIndexService.getWithException(indexEvent.getIndexName(), indexEvent.getIndexType());
-        /*
-        Проверка на корректность _id документа
-         */
+            // Проверка на корректность _id документа
         CreateIndexItem(indexEvent);
 
-        rabbitMQ.sendIndexEvent(indexEvent);
+        reactiveQueue.sendIndexEvent(indexEvent);
 
         return Mono.just(new Document().append("id", indexEvent.getId())
                 .append("index", indexEvent.getIndexName())
@@ -189,16 +175,15 @@ public class Indexer {
             Task task = new Task(mongoElasticIndex);
             ParallelFlux dataEventsFlux = reactorRepositoryMongoDB
                     .findAll(mongoElasticIndex.getCollection(), mongoElasticIndex.getProjection())
-
                     .parallel(appConfig.getIndexParallelism())
                     .runOn(Schedulers.boundedElastic());
-
-            task.setDispose(processingData((p) -> "index",
+            Flux<Tuple2<String,Document>> processedData = processingData(dataEventsFlux, (p) -> "index",
                     (p) -> (Document)p,
                     (p) -> mongoElasticIndex,
                     Flux.just(),
-                    task)
-                    .apply(dataEventsFlux));
+                    task);
+
+            task.setDispose(subscribe(processedData, task));
             task.setStartDate(new Date());
             addTask(task);
             result.append("Index refresh", new Document()
@@ -209,24 +194,28 @@ public class Indexer {
         return Mono.just(result);
     }
 
-    private <T> Function<ParallelFlux<T>, Disposable>
-        processingData(Function<T, String> getAction,
+    private <T> Flux<Tuple2<String,Document>>
+        processingData(ParallelFlux<T> events,
+                Function<T, String> getAction,
                        Function<T, Document> getDocument,
                        Function<T, MongoElasticIndex> getMongoElasticIndex,
                        Flux<String> mergeFlux,
                        Task task) {
-        return (ParallelFlux<T> events) -> events
-            .transform(joinData(getDocument, getMongoElasticIndex))    // Добавление данных к исходному документу из присоединяемых коллекций
-            .transform(document2ElasticJson(getAction, getDocument, getMongoElasticIndex)) // Генерация данных для передачи в ElasticSearch
-
+        return  events
+                // Добавление данных к исходному документу из присоединяемых коллекций
+            .transform(joinData(getDocument, getMongoElasticIndex))
+                // Генерация данных для передачи в ElasticSearch
+            .transform(document2ElasticJson(getAction, getDocument, getMongoElasticIndex))
             .sequential()
-            .transform(grouping(task))      // Агрегирование данных для _bulk
+                // Агрегирование данных для _bulk
+            .transform(grouping(task))
+                // Добавление потока данных, на которые не получен ответ от ElasticSearch
             .mergeWith(mergeFlux)
-            .transform(postBulk(task))          // Отправка запросов в ElasticSearch
+                // Отправка запросов в ElasticSearch
+            .transform(postBulk(task))
             .subscribeOn(Schedulers.single())
             .doOnNext(testAliveResponses(task))
             .doOnSubscribe(p-> p.request(appConfig.getMaxSizeBuffer() * 2))
-
             .doOnComplete(() -> { logger.info("Start: {} End: {} read {} write {}",
                     formatDate(task.getStartDate()),
                     formatDate(new Date()),
@@ -234,23 +223,27 @@ public class Indexer {
                     task.getIndexesWrite(), getMaxProcessingRequest());
                 fileStorage.writeCollection2Files(waitingForResponse);
                 removeTask(task);
-            })
+            });
 
+    }
+
+    private Disposable subscribe(Flux<Tuple2<String,Document>> events, Task task) {
+        return  events
             .subscribe(
-                    p -> {
-                        if(isNull(task.getMongoElasticIndex())) { // Если задача не переиндексация
-                            waitingForResponse.remove(p.getT1());
-                        }
-                        int count = Optional.ofNullable(p.getT2().get("items", List.class))
-                                .map(List::size)
-                                .orElse(0);
-                        task.addIndexesWrite(count);
-                    },
-                    e -> {
-                        if(task != rabbitMQTask)removeTask(task);
-                        fileStorage.writeCollection2Files(waitingForResponse);
-                        logger.error("Error: {}", e.getMessage());
+                p -> {
+                    if(isNull(task.getMongoElasticIndex())) { // Если задача не переиндексация
+                        waitingForResponse.remove(p.getT1());
                     }
+                    int count = Optional.ofNullable(p.getT2().get("items", List.class))
+                            .map(List::size)
+                            .orElse(0);
+                    task.addIndexesWrite(count);
+                },
+                e -> {
+                    if(task != rabbitMQTask)removeTask(task);
+                    fileStorage.writeCollection2Files(waitingForResponse);
+                    logger.error("Error: {}", e.getMessage());
+                }
             );
     }
 
@@ -259,14 +252,15 @@ public class Indexer {
      * В качестве параметра функциональный объект принимает поток {@code ParallelFlux<Document>}
      * и возвращает поток {@code ParallelFlux<Document>}
      *
-     * @param getMongoElasticIndex функциональный объект, возвращающи описания индекса
+     * @param getDocument функциональный объект, возвращающий/извлекающий из сообщения докумнт
+     * @param getMongoElasticIndex функциональный объект, возвращающий/извлекающий из сообщения описания индекса
      * @return функциональный объект, модифицирующий документ
      */
     private <T> Function<ParallelFlux<T>, ParallelFlux<T>>
         joinData(Function<T, Document> getDocument,
                 Function<T, MongoElasticIndex> getMongoElasticIndex) {
-        return (ParallelFlux<T> documents) ->
-            documents.flatMap(p -> {
+        return (ParallelFlux<T> items) ->
+                items.flatMap(p -> {
                 if(getDocument.apply(p).size() == 1) {
                     return Flux.just(p);
                 }
@@ -287,7 +281,9 @@ public class Indexer {
      * В качестве параметра функциональный объект принимает поток {@code ParallelFlux<Document>}
      * и возвращает поток {@code ParallelFlux<String>}
      *
-     * @param getMongoElasticIndex функциональный объект, возвращающи описания индекса
+     * @param getAction функциональный объект, возвращающий/извлекающий из сообщения действие
+     * @param getDocument функциональный объект, возвращающий/извлекающий из сообщения докумнт
+     * @param getMongoElasticIndex функциональный объект, возвращающий/извлекающий из сообщения описания индекса
      * @return функциональный объект, генерирующий данные
      */
     private <T> Function<ParallelFlux<T>, ParallelFlux<String>>
@@ -316,6 +312,7 @@ public class Indexer {
      * В качестве параметра функциональный объект принимает поток {@code Flux<String>}
      * и возвращает поток {@code Flux<String>}
      *
+     * @param task контекст текущей задачи
      * @return функциональный объект, группирующий данные
      */
     Function<Flux<String>, Flux<String>> grouping(Task task) {
@@ -331,6 +328,7 @@ public class Indexer {
      * В качестве параметра функциональный объект принимает поток {@code Flux<String>}
      * и возвращает поток {@code Flux<Document>}
      *
+     * @param task контекст текущей задачи
      * @return функциональный объект, выполнняющий HTTP-запросы к ElasticSearch
      */
     public Function<Flux<String>, Flux<Tuple2<String, Document>>> postBulk(Task task) {
@@ -444,7 +442,7 @@ public class Indexer {
         final private MongoElasticIndex mongoElasticIndex;
     }
 
-    IndexItem CreateIndexItem(RabbitMQ.IndexEvent indexEvent)
+    IndexItem CreateIndexItem(IndexEvent indexEvent)
             throws IllegalObjectIdException, IOException, ConvertDataException {
 
         return new IndexItem(indexEvent.getAction(), idDocument(indexEvent.getId()),
@@ -520,14 +518,6 @@ public class Indexer {
             return false;
         }
 
-    }
-
-    static public class HttpServiceException extends RuntimeException {
-        int statusCode;
-        public HttpServiceException(String message, int statusCode) {
-            super(message);
-            this.statusCode = statusCode;
-        }
     }
 
 }

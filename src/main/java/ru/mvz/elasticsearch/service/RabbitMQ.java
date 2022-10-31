@@ -3,17 +3,15 @@ package ru.mvz.elasticsearch.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rabbitmq.client.Delivery;
-import lombok.AllArgsConstructor;
 import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.rabbitmq.OutboundMessage;
-import reactor.rabbitmq.Sender;
+import reactor.rabbitmq.*;
 import ru.mvz.elasticsearch.config.RabbitMQConfig;
 
 import java.io.IOException;
+import java.time.Duration;
 
 /**
  * Класс реализует методы
@@ -23,7 +21,7 @@ import java.io.IOException;
  */
 @Service
 @Getter
-public class RabbitMQ {
+public class RabbitMQ implements ReactiveQueue {
 
     final private RabbitMQConfig rabbitMQConfig;
 
@@ -36,6 +34,20 @@ public class RabbitMQ {
         this.rabbitMQSender = rabbitMQSender;
         this.objectMapper = objectMapper;
     }
+
+    @Override
+    public Flux<Delivery> inboundFlux() {
+        return RabbitFlux
+                .createReceiver()
+                .consumeAutoAck(rabbitMQConfig.getQueue(), new ConsumeOptions()
+                        .exceptionHandler(new ExceptionHandlers.RetryAcknowledgmentExceptionHandler(
+                                Duration.ofSeconds(20), Duration.ofMillis(500),
+                                ExceptionHandlers.CONNECTION_RECOVERY_PREDICATE
+                        ))
+                );
+    }
+
+    @Override
     public void send(String msg) {
         Mono<OutboundMessage> outboundMono = Mono.just(new OutboundMessage(
                 "amq.direct",
@@ -45,43 +57,31 @@ public class RabbitMQ {
         rabbitMQSender.sendWithPublishConfirms(outboundMono)
                 .subscribe(outboundMessageResult -> {
                     if (outboundMessageResult.isAck()) {
-// ???
+// TODO
 
                     }
                 });
 
     }
 
+    @Override
     public void sendIndexEvent(IndexEvent indexEvent) throws JsonProcessingException {
         send(objectMapper.writeValueAsString(indexEvent));
     }
 
+    @Override
     public IndexEvent msg2IndexEvent(Delivery message) {
         return castMessage(message, IndexEvent.class);
     }
 
+    @Override
     public  <T> T castMessage(Delivery message, Class<T> clazz) {
         try {
             return objectMapper.readValue(message.getBody(), clazz);
         } catch (IOException e) {
-//            log.warn("Can't deserialize payload.", e);
+//   TODO         log.warn("Can't deserialize payload.", e);
             return null;
         }
     }
 
-    @Getter
-    @Setter
-    @NoArgsConstructor
-    @AllArgsConstructor
-    static public class IndexEvent {
-
-        private String action;
-
-        private String id;
-
-        private String indexName;
-
-        private String indexType;
-
-    }
 }
