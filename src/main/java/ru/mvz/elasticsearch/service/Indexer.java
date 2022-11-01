@@ -224,7 +224,6 @@ public class Indexer {
                 fileStorage.writeCollection2Files(waitingForResponse);
                 removeTask(task);
             });
-
     }
 
     private Disposable subscribe(Flux<Tuple2<String,Document>> events, Task task) {
@@ -260,21 +259,22 @@ public class Indexer {
         joinData(Function<T, Document> getDocument,
                 Function<T, MongoElasticIndex> getMongoElasticIndex) {
         return (ParallelFlux<T> items) ->
-                items.flatMap(p -> {
-                if(getDocument.apply(p).size() == 1) {
-                    return Flux.just(p);
+            items.flatMap(p -> {
+            if(getDocument.apply(p).size() == 1) {
+                return Flux.just(p);
+            }
+            return
+                Flux.fromIterable(getMongoElasticIndex.apply((T) p).getJoinConditions(getDocument.apply(p)))
+                    .flatMap(it -> Flux.zip(Flux.just(it.getCollection().getJoinedFieldName()),
+                        reactorRepositoryMongoDB.find(getMongoElasticIndex.apply((T) p).getCollection(),
+                                it.getCondition(),
+                                it.getCollection().getProjection())))
+                    .reduce(p, (acc, t) -> {
+                        getDocument.apply(acc).put(t.getT1(), t.getT2());
+                        return acc;
+                    });
                 }
-                return
-                    Flux.fromIterable(getMongoElasticIndex.apply((T) p).getJoinConditions(getDocument.apply(p)))
-                            .flatMap(it -> Flux.zip(Flux.just(it.getCollection().getJoinedFieldName()),
-                                    reactorRepositoryMongoDB.find(getMongoElasticIndex.apply((T) p).getCollection(), it.getCondition(),
-                                            it.getCollection().getProjection())))
-                            .reduce(p, (acc, t) -> {
-                                getDocument.apply(acc).put(t.getT1(), t.getT2());
-                                return acc;
-                            });
-                    }
-            );
+        );
     }
     /**
      * Создает функциональные объект, генерирующий данные для отправки в Elastic Search

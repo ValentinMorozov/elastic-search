@@ -29,9 +29,8 @@ public class ReactorRepositoryMongoDB {
         return Flux.from(getCollection(collectionName).find(expression).projection(projections));
     }
 
-    public Flux<Document> findAll(String collectionName, Document projections) {
-//        List<Document> coll = Flux.from(getCollection(collectionName).find().projection(projections)).toStream().collect(Collectors.toList());
-        return Flux.from(getCollection(collectionName).find().projection(projections));
+    public Flux<Document> findAll(String collectionName, Document projection) {
+        return Flux.from(getCollection(collectionName).find().projection(projection));
     }
 
 }

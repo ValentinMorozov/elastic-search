@@ -1,0 +1,36 @@
+---
+## Default Kibana configuration from Kibana base image.
+## https://github.com/elastic/kibana/blob/master/src/dev/build/tasks/os_packages/docker_generator/templates/kibana_yml.template.ts
+#
+server.name: kibana
+server.host: 0.0.0.0
+#server.ssl.enabled: false
+
+elasticsearch.hosts: [ "http://elasticsearch:9200" ]
+monitoring.ui.container.elasticsearch.enabled: true
+
+## X-Pack security credentials
+#
+elasticsearch.username: kibana_system
+elasticsearch.password: ${KIBANA_SYSTEM_PASSWORD}
+
+#xpack.security:
+#    encryptionKey: "something_at_least_32_characters111111111"
+#    session:
+#       idleTimeout: "10m"
+#       lifespan: "8h"
+
+
+#xpack.fleet.agents.enabled: true
+#xpack.fleet.packages:
+#  - name: fleet_server
+#    version: latest
+#xpack.fleet.agentPolicies:
+#  - name: Fleet Server policy
+#    id: fleet-server-policy
+#    description: Fleet server policy
+#    namespace: default
+#    package_policies:
+#      - name: Fleet Server
+#        package:
+#          name: fleet_server
