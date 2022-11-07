@@ -14,7 +14,7 @@ import java.io.IOException;
 import java.time.Duration;
 
 /**
- * Класс реализует методы
+ * Реализует интерфейс ReactiveQueue
  *
  * @author  Валентин Морозов
  * @since   1.0

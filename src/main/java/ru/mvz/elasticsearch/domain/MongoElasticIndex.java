@@ -252,7 +252,7 @@ public class MongoElasticIndex extends MongoFields {
     }
 
     /**
-     * Реализует интерфейс .
+     *
      *
      * @author  Валентин Морозов
      * @since   1.0
