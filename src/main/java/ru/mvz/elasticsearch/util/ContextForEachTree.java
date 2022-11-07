@@ -26,7 +26,7 @@ public interface ContextForEachTree {
 
     ArrayList<String> getCurrentPath();
 
-    public ArrayList<String> getCurrentPath(String key);
+    ArrayList<String> getCurrentPath(String key);
 
     ArrayList<String> getCurrentPath(Map.Entry<String, Object> node);
 

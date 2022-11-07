@@ -140,14 +140,14 @@ public class Indexer {
                             d.getT2().getMongoElasticIndex()))
                 );
 
-        Flux<Tuple2<String,Document>> processedData = processingData(dataEventsFlux,
+        Flux<Tuple2<String,Document>> processingData = processingData(dataEventsFlux,
                 EventDocument::getAction,
                 EventDocument::getDocument,
                 EventDocument::getMongoElasticIndex,
                 fileStorage.pullFileContents(),
                 rabbitMQTask);
 
-        rabbitMQTask.setDispose(subscribe(processedData, rabbitMQTask));
+        rabbitMQTask.setDispose(subscribe(processingData, rabbitMQTask));
         rabbitMQTask.setStartDate(new Date());
         addTask(rabbitMQTask);
     }
@@ -177,13 +177,13 @@ public class Indexer {
                     .findAll(mongoElasticIndex.getCollection(), mongoElasticIndex.getProjection())
                     .parallel(appConfig.getIndexParallelism())
                     .runOn(Schedulers.boundedElastic());
-            Flux<Tuple2<String,Document>> processedData = processingData(dataEventsFlux, (p) -> "index",
+            Flux<Tuple2<String,Document>> processingData = processingData(dataEventsFlux, (p) -> "index",
                     (p) -> (Document)p,
                     (p) -> mongoElasticIndex,
                     Flux.just(),
                     task);
 
-            task.setDispose(subscribe(processedData, task));
+            task.setDispose(subscribe(processingData, task));
             task.setStartDate(new Date());
             addTask(task);
             result.append("Index refresh", new Document()
@@ -255,6 +255,7 @@ public class Indexer {
      * @param getMongoElasticIndex функциональный объект, возвращающий/извлекающий из сообщения описания индекса
      * @return функциональный объект, модифицирующий документ
      */
+
     private <T> Function<ParallelFlux<T>, ParallelFlux<T>>
         joinData(Function<T, Document> getDocument,
                 Function<T, MongoElasticIndex> getMongoElasticIndex) {
