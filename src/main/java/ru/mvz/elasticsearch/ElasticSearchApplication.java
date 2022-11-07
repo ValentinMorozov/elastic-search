@@ -38,7 +38,7 @@ public class ElasticSearchApplication {
 
     @EventListener(ApplicationReadyEvent.class)
     public void runAfterStartup() throws Exception {
-        logger.info("Yaaah, I am running........");
+        logger.info("Indexer running........");
 
         if(appConfig.isHooksOnErrorDropped()) {
             Hooks.onErrorDropped(e -> {
@@ -48,8 +48,6 @@ public class ElasticSearchApplication {
                     }
             );
         }
-//        indexer.refresh("egrip-index", "");
-
     }
 
 }

@@ -4,16 +4,26 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import lombok.Getter;
 import lombok.Setter;
 import org.bson.Document;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import ru.mvz.elasticsearch.service.Indexer;
 import ru.mvz.elasticsearch.util.*;
 import ru.mvz.elasticsearch.util.DocumentHelper.*;
 
 import java.util.*;
 
 import static java.util.Objects.nonNull;
-
+/**
+ * Класс реализует реализует интерфейс MongoElasticIndexParameters, выполняет преобразование описание индекса из формата
+ * Document bson в объект класса
+ *
+ * @author  Валентин Морозов
+ * @since   1.0
+ */
 @Setter
 @Getter
 public class Bson2MongoElasticIndexParameters implements MongoElasticIndexParameters {
+    private static final Logger logger = LoggerFactory.getLogger(Bson2MongoElasticIndexParameters.class);
 
     DocumentHelper documentHelper;
 
@@ -43,6 +53,10 @@ public class Bson2MongoElasticIndexParameters implements MongoElasticIndexParame
 
     }
 
+    public void onUnknownAttribute(ContextForEachTree ctx) {
+        logger.warn("Unknown Attribute: {}", String.join("\\",ctx.getCurrentPath(ctx.getKey())));
+    }
+
     @Override
     public DocumentTree geDocumentTree() {
         return getDocumentHelper().getDocumentTree();
@@ -53,11 +67,11 @@ public class Bson2MongoElasticIndexParameters implements MongoElasticIndexParame
             public ValueReceiver receive(ContextForEachTree ctx) throws ConvertDataException {
                 ValueReceiver receiver = this;
                 if (ctx.getTypeValue() == NodeType.NODE) {
-                    switch (ctx.getKey()) {
-                        case "source": receiver = sourceReceiver(documentHelper);
-                            break;
-                        default:
-                            break;
+                    if("source".equals(ctx.getKey())) {
+                        receiver = sourceReceiver(documentHelper);
+                    }
+                    else {
+                        onUnknownAttribute(ctx);
                     }
                 } else if (ctx.getTypeValue() == NodeType.VALUE) {
                     switch (ctx.getKey()) {
@@ -67,7 +81,7 @@ public class Bson2MongoElasticIndexParameters implements MongoElasticIndexParame
                             break;
                         case "type": setType(ctx.getValue(String::valueOf));
                             break;
-                        default:
+                        default:  onUnknownAttribute(ctx);
                             break;
                     }
                 }
@@ -89,13 +103,12 @@ public class Bson2MongoElasticIndexParameters implements MongoElasticIndexParame
                 }
                 else if ("summaryField".equals(key))
                     receiver = summaryFieldReceiver(documentHelper);
-
             } else if (ctx.getTypeValue() == NodeType.VALUE) {
-                switch (ctx.getKey()) {
-                    case "collection": setCollection(ctx.getValue(String::valueOf));
-                        break;
-                    default:
-                        break;
+                if("collection".equals(ctx.getKey())) {
+                    setCollection(ctx.getValue(String::valueOf));
+                }
+                else {
+                    onUnknownAttribute(ctx);
                 }
             }
             return receiver;
@@ -114,7 +127,7 @@ public class Bson2MongoElasticIndexParameters implements MongoElasticIndexParame
                         break;
                     case "as": setSummaryFieldName(ctx.getValue(String::valueOf));
                         break;
-                    default:
+                    default: onUnknownAttribute(ctx);
                         break;
                 }
             }
@@ -176,7 +189,7 @@ public class Bson2MongoElasticIndexParameters implements MongoElasticIndexParame
                         case "summaryFieldOnly":
                             currentItem.setSummaryFieldOnly(ctx.getValue(null));
                             break;
-                        default:
+                        default: onUnknownAttribute(ctx);
                             break;
                     }
                 }
@@ -195,12 +208,11 @@ public class Bson2MongoElasticIndexParameters implements MongoElasticIndexParame
                     if ("fields".equals(key))
                         currentItem.setSummaryFieldFields(documentHelper.toList(ctx.getValue()));
                 } else if (ctx.getTypeValue() == NodeType.VALUE) {
-                    switch (ctx.getKey()) {
-                        case "as":
-                            currentItem.setSummaryFieldName(ctx.getValue(String::valueOf));
-                            break;
-                        default:
-                            break;
+                    if("as".equals(ctx.getKey())) {
+                        currentItem.setSummaryFieldName(ctx.getValue(String::valueOf));
+                    }
+                    else {
+                        onUnknownAttribute(ctx);
                     }
                 }
             }
